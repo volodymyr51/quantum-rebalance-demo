@@ -15,13 +15,19 @@ class PoCConfig:
 	Attributes define market simulation size, optimization intensity, and
 	risk/transaction-cost preferences used during dynamic rebalancing.
 	"""
-
+	# Number of assets in the simulated universe (up to 3 for this example).
 	n_assets: int = 3
+	# Total number of time steps to simulate (e.g. 180 trading days).
 	n_steps: int = 180
+	# Number of past days used to build features and estimate returns/covariance.
 	lookback: int = 20
+	# Number of random candidate parameter vectors evaluated at each rebalance.
 	random_search_samples: int = 80
+	# Higher values lead to more conservative portfolios with lower variance but also lower expected returns.
 	risk_aversion: float = 8.0
+	# Cost coefficient applied to turnover in the utility function (e.g. 0.002 for 0.2% per unit turnover).
 	transaction_cost: float = 0.002
+	# Random seed for reproducibility of market simulation and optimization.
 	seed: int = 7
 
 
@@ -81,6 +87,8 @@ def simulate_market(n_steps: int, n_assets: int, seed: int) -> np.ndarray:
 	rng = np.random.default_rng(seed)
 	returns = np.zeros((n_steps, n_assets))
 
+	# Each row corresponds to a different macro‑regime (the code cycles every 45 steps).
+	# Each column gives the per‑asset drift for that regime.
 	drift_regimes = np.array(
 		[
 			[0.0012, 0.0008, 0.0010],
@@ -90,6 +98,8 @@ def simulate_market(n_steps: int, n_assets: int, seed: int) -> np.ndarray:
 	)
 	drift_regimes = drift_regimes[:, :n_assets]
 
+	# Diagonal entries (0.00030, 0.00024, 0.00028) are the variances of each asset’s return.
+	#Off‑diagonal entries (e.g. 0.00009 between asset 0 and asset 1) are their pairwise covariances.
 	base_cov = np.array(
 		[
 			[0.00030, 0.00009, 0.00006],
@@ -99,13 +109,19 @@ def simulate_market(n_steps: int, n_assets: int, seed: int) -> np.ndarray:
 	)
 	covariance = base_cov[:n_assets, :n_assets]
 
+	# The code models the market as switching every 45 days between a few predefined drift vectors. Each of those vectors is a regime:
+
+	# Regime 0 might represent a benign, rising‑market environment (all assets have small positive drifts).
+	# Regime 1 could be a rotation or correction (one or more drifts turn negative).
+	# Regime 2 another distinct market state, etc.
 	regime = 0
 	for t in range(n_steps):
 		if t > 0 and t % 45 == 0:
 			regime = (regime + 1) % drift_regimes.shape[0]
 		daily = rng.multivariate_normal(mean=drift_regimes[regime], cov=covariance)
 		returns[t] = daily
-
+	
+	# This creates a more realistic simulation where the expected returns of the assets change over time, forcing the rebalancing strategy to adapt to shifting market conditions.
 	return returns
 
 
@@ -155,11 +171,15 @@ def evaluate_candidate(
 	Returns:
 		Tuple of ``(utility_score, candidate_weights)``.
 	"""
-
+	# Get candidate weights from the quantum policy and compute utility components.
 	candidate_weights = quantum_policy(features=features, theta=theta)
+	# The expected return is the dot product of the candidate weights and the estimated expected returns (mu).
 	expected_return = float(candidate_weights @ mu)
+	# The variance is calculated as the quadratic form candidate_weights^T * cov * candidate_weights, which gives the portfolio variance based on the covariance matrix and the candidate weights.
 	variance = float(candidate_weights @ cov @ candidate_weights)
+	# Turnover is the sum of absolute differences between the candidate weights and the previous weights, representing how much the portfolio would need to be adjusted. This is multiplied by the transaction cost to get the total cost of rebalancing.
 	turnover = float(np.abs(candidate_weights - prev_weights).sum())
+	# The utility combines the expected return, penalizes variance according to the risk aversion parameter, and subtracts the transaction cost based on turnover. A higher utility indicates a more desirable candidate portfolio.
 	utility = expected_return - risk_aversion * variance - transaction_cost * turnover
 	return utility, candidate_weights
 
@@ -191,7 +211,7 @@ def optimize_quantum_parameters(
 	Returns:
 		Tuple ``(best_theta, best_weights, best_utility)``.
 	"""
-
+	# Start with the current parameters as the best candidate and evaluate its utility.
 	best_theta = theta_center.copy()
 	best_utility, best_weights = evaluate_candidate(
 		theta=best_theta,
@@ -202,7 +222,7 @@ def optimize_quantum_parameters(
 		risk_aversion=risk_aversion,
 		transaction_cost=transaction_cost,
 	)
-
+	# Perform a local random search by sampling candidate parameter vectors around the current center. Each candidate is evaluated, and if it has a higher utility than the best found so far, it becomes the new best.
 	for _ in range(random_search_samples):
 		candidate_theta = theta_center + rng.normal(0.0, 0.35, size=theta_center.shape[0])
 		utility, candidate_weights = evaluate_candidate(
@@ -232,7 +252,7 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 	Args:
 		config: Simulation and optimization settings.
 	"""
-
+	# Step 1: Simulate market returns with regime-switching drifts.
 	rng = np.random.default_rng(config.seed)
 	returns = simulate_market(
 		n_steps=config.n_steps,
@@ -249,12 +269,14 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 	utility_log = []
 	weight_log = []
 
+	# Step 2: Iterate through time steps, rebalance portfolio, and log results.
 	for t in range(config.lookback, config.n_steps):
 		window = returns[t - config.lookback : t]
 		features = build_features(window)
 		mu = window.mean(axis=0)
 		cov = np.cov(window, rowvar=False)
 
+		# Optimize quantum parameters with local random search to find better weights.
 		theta, new_weights, utility = optimize_quantum_parameters(
 			rng=rng,
 			features=features,
@@ -266,10 +288,10 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 			risk_aversion=config.risk_aversion,
 			transaction_cost=config.transaction_cost,
 		)
-
+		# Calculate turnover and realized return after applying new weights, accounting for transaction costs.
 		turnover = float(np.abs(new_weights - weights).sum())
 		realized = float(new_weights @ returns[t] - config.transaction_cost * turnover)
-
+		# Update portfolio weights and log statistics for this step.
 		weights = new_weights
 		portfolio_returns.append(realized)
 		wealth.append(wealth[-1] * (1.0 + realized))
@@ -277,6 +299,7 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 		utility_log.append(utility)
 		weight_log.append(weights.copy())
 
+	# After the simulation, convert logs to arrays for easier analysis and print summary statistics.
 	portfolio_returns_arr = np.array(portfolio_returns)
 	weight_log_arr = np.array(weight_log)
 

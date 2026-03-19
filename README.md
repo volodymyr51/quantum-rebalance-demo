@@ -12,6 +12,7 @@ The idea is simple:
 ## Files
 
 - `main.py`: complete runnable PoC script.
+- `quantum_finance_business.ipynb`: notebook version with business-friendly execution flow.
 - `requirements.txt`: minimal dependency list.
 
 ## Quick start
@@ -21,6 +22,15 @@ py -m uv venv .venv
 py -m uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 py -m uv run --python .venv\Scripts\python.exe main.py
 ```
+
+## Run as notebook
+
+```powershell
+py -m uv pip install --python .venv\Scripts\python.exe jupyter
+py -m uv run --python .venv\Scripts\python.exe jupyter notebook
+```
+
+Open `quantum_finance_business.ipynb` and run cells from top to bottom.
 
 ## What this PoC demonstrates
 
