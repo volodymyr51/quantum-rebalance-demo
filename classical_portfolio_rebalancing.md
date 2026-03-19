@@ -34,21 +34,19 @@ $$
 \boldsymbol{\mu}_t = \frac{1}{L}\sum_{\tau=t-L}^{t-1} \mathbf{r}_{\tau}
 $$
 
-Covariance matrix:
+Covariance matrix (sample covariance computed from the lookback window):
 
 $$
-\Sigma_t = \operatorname{Cov}(R_{t-L:t-1})
+\Sigma_t = \frac{1}{L-1}\sum_{\tau=t-L}^{t-1}
+(\mathbf{r}_\tau - \boldsymbol{\mu}_t)
+(\mathbf{r}_\tau - \boldsymbol{\mu}_t)^\top
 $$
 
 ## 3) Classical Optimization Objective
 
-Choose new weights $\mathbf{w}_t$ by maximizing utility:
+Choose new weights $\mathbf{w}_t$ by maximizing the utility:
 
-$$
-U(\mathbf{w}) = \boldsymbol{\mu}_t^\top \mathbf{w}
-- \lambda \mathbf{w}^\top \Sigma_t \mathbf{w}
-- c\,\|\mathbf{w} - \mathbf{w}_{t-1}\|_1
-$$
+$$U(\mathbf{w}) = \boldsymbol{\mu}_t^\top \mathbf{w} - \lambda\,\mathbf{w}^\top \Sigma_t \mathbf{w} - c\,\left\lVert \mathbf{w} - \mathbf{w}_{t-1} \right\rVert_1$$
 
 subject to:
 
@@ -59,7 +57,7 @@ $$
 where:
 - $\lambda$ = risk aversion
 - $c$ = transaction cost coefficient
-- $\|\mathbf{w} - \mathbf{w}_{t-1}\|_1 = \sum_i |w_i - w_{t-1,i}|$ is turnover
+- $\left\lVert \mathbf{w} - \mathbf{w}_{t-1} \right\rVert_1 = \sum_{i=1}^N \lvert w_i - w_{t-1,i} \rvert$ is turnover
 
 Interpretation:
 - First term rewards expected return.
