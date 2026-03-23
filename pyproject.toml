@@ -57,4 +57,5 @@ dependencies = [
     "watchfiles==1.1.1",
     "wrapt==2.0.1",
     "wsproto==1.2.0",
+    "qiskit==2.3.1"
 ]
