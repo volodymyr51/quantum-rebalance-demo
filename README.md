@@ -23,6 +23,22 @@ py -m uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 py -m uv run --python .venv\Scripts\python.exe main.py
 ```
 
+## Data source modes
+
+`main.py` now supports both simulated and real market data.
+
+Use simulated data (default):
+
+```powershell
+py -m uv run --python .venv\Scripts\python.exe main.py --data-source simulated --n-assets 3 --n-steps 180
+```
+
+Use real market data (Yahoo Finance API via `yfinance`):
+
+```powershell
+py -m uv run --python .venv\Scripts\python.exe main.py --data-source real --tickers SPY,TLT,GLD --real-period 2y --real-interval 1d
+```
+
 ## Run as notebook
 
 ```powershell
@@ -41,7 +57,7 @@ Open `quantum_finance_business.ipynb` and run cells from top to bottom.
 ## Notes
 
 - This is an educational prototype, not production portfolio advice.
-- The market data is synthetic (regime-switching multivariate normal returns).
+- Real market data mode uses Yahoo Finance (`yfinance`), and simulated mode remains available for controlled experiments.
 - You can tweak `PoCConfig` in `main.py` to test different settings.
 
 

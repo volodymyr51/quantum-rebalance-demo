@@ -57,7 +57,7 @@ $$
 where:
 - $\lambda$ = risk aversion
 - $c$ = transaction cost coefficient
-- $\left\lVert \mathbf{w} - \mathbf{w}_{t-1} \right\rVert_1 = \sum_{i=1}^N \lvert w_i - w_{t-1,i} \rvert$ is turnover
+- $\lVert \mathbf{w} - \mathbf{w}_{t-1} \rVert_1 = \sum_{i=1}^N |w_i - w_{t-1,i}|$ is turnover
 
 Interpretation:
 - First term rewards expected return.

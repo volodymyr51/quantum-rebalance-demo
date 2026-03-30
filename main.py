@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from typing import Tuple
 
+from logging_utils import configure_logging
+from market_data import fetch_real_market_returns, simulate_market
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector
@@ -15,6 +18,13 @@ class PoCConfig:
 	Attributes define market simulation size, optimization intensity, and
 	risk/transaction-cost preferences used during dynamic rebalancing.
 	"""
+	# Data source for returns: ``simulated`` uses regime simulation, ``real`` uses Yahoo Finance API.
+	data_source: str = "simulated"
+	# Comma-separated list of tickers used only when ``data_source == 'real'``.
+	real_tickers: Tuple[str, ...] = ("SPY", "QQQ", "GLD")
+	# Yahoo Finance history period and bar interval for real market data.
+	real_period: str = "2y"
+	real_interval: str = "1d"
 	# Number of assets in the simulated universe (up to 3 for this example).
 	n_assets: int = 3
 	# Total number of time steps to simulate (e.g. 180 trading days).
@@ -29,6 +39,60 @@ class PoCConfig:
 	transaction_cost: float = 0.002
 	# Random seed for reproducibility of market simulation and optimization.
 	seed: int = 7
+	# Logging verbosity for intermediate rebalancing diagnostics.
+	log_level: str = "INFO"
+
+
+def parse_cli_args() -> PoCConfig:
+	"""Build configuration from command-line arguments.
+
+	Returns:
+		A populated ``PoCConfig`` instance.
+	"""
+	parser = argparse.ArgumentParser(
+		description="Hybrid quantum-classical portfolio rebalancing PoC"
+	)
+	parser.add_argument(
+		"--data-source",
+		choices=("simulated", "real"),
+		default="simulated",
+		help="Returns source: synthetic simulator or Yahoo Finance real data",
+	)
+	parser.add_argument(
+		"--tickers",
+		default="SPY,TLT,GLD",
+		help="Comma-separated ticker list for real data mode",
+	)
+	parser.add_argument("--real-period", default="2y", help="Yahoo Finance period, e.g. 1y, 2y, 5y")
+	parser.add_argument("--real-interval", default="1d", help="Yahoo Finance interval, e.g. 1d, 1wk")
+	parser.add_argument("--n-assets", type=int, default=3, help="Number of simulated assets")
+	parser.add_argument("--n-steps", type=int, default=180, help="Number of simulated time steps")
+	parser.add_argument("--lookback", type=int, default=20, help="Rolling lookback window")
+	parser.add_argument("--samples", type=int, default=80, help="Random search samples per rebalance")
+	parser.add_argument("--risk-aversion", type=float, default=8.0, help="Variance penalty weight")
+	parser.add_argument("--transaction-cost", type=float, default=0.002, help="Turnover transaction cost")
+	parser.add_argument("--seed", type=int, default=7, help="Random seed")
+	parser.add_argument("--log-level", default="INFO", help="Logging level")
+
+	args = parser.parse_args()
+	tickers = tuple(t.strip().upper() for t in args.tickers.split(",") if t.strip())
+	if args.data_source == "real" and not tickers:
+		raise ValueError("At least one ticker is required when --data-source=real")
+
+	return PoCConfig(
+		data_source=args.data_source,
+		real_tickers=tickers,
+		real_period=args.real_period,
+		real_interval=args.real_interval,
+		n_assets=args.n_assets,
+		n_steps=args.n_steps,
+		lookback=args.lookback,
+		random_search_samples=args.samples,
+		risk_aversion=args.risk_aversion,
+		transaction_cost=args.transaction_cost,
+		seed=args.seed,
+		log_level=args.log_level,
+	)
 
 
 def quantum_policy(features: np.ndarray, theta: np.ndarray) -> np.ndarray:
@@ -70,59 +134,6 @@ def quantum_policy(features: np.ndarray, theta: np.ndarray) -> np.ndarray:
 
 	raw_scores = p_one + 1e-9
 	return raw_scores / raw_scores.sum()
-
-
-def simulate_market(n_steps: int, n_assets: int, seed: int) -> np.ndarray:
-	"""Generate synthetic multi-asset returns with regime-switching drifts.
-
-	Args:
-		n_steps: Number of time steps to simulate.
-		n_assets: Number of assets in the universe.
-		seed: Random seed for reproducible sampling.
-
-	Returns:
-		Array of shape ``(n_steps, n_assets)`` with daily returns.
-	"""
-
-	rng = np.random.default_rng(seed)
-	returns = np.zeros((n_steps, n_assets))
-
-	# Each row corresponds to a different macro‑regime (the code cycles every 45 steps).
-	# Each column gives the per‑asset drift for that regime.
-	drift_regimes = np.array(
-		[
-			[0.0012, 0.0008, 0.0010],
-			[-0.0003, 0.0014, 0.0006],
-			[0.0016, -0.0002, 0.0009],
-		]
-	)
-	drift_regimes = drift_regimes[:, :n_assets]
-
-	# Diagonal entries (0.00030, 0.00024, 0.00028) are the variances of each asset’s return.
-	#Off‑diagonal entries (e.g. 0.00009 between asset 0 and asset 1) are their pairwise covariances.
-	base_cov = np.array(
-		[
-			[0.00030, 0.00009, 0.00006],
-			[0.00009, 0.00024, 0.00008],
-			[0.00006, 0.00008, 0.00028],
-		]
-	)
-	covariance = base_cov[:n_assets, :n_assets]
-
-	# The code models the market as switching every 45 days between a few predefined drift vectors. Each of those vectors is a regime:
-
-	# Regime 0 might represent a benign, rising‑market environment (all assets have small positive drifts).
-	# Regime 1 could be a rotation or correction (one or more drifts turn negative).
-	# Regime 2 another distinct market state, etc.
-	regime = 0
-	for t in range(n_steps):
-		if t > 0 and t % 45 == 0:
-			regime = (regime + 1) % drift_regimes.shape[0]
-		daily = rng.multivariate_normal(mean=drift_regimes[regime], cov=covariance)
-		returns[t] = daily
-	
-	# This creates a more realistic simulation where the expected returns of the assets change over time, forcing the rebalancing strategy to adapt to shifting market conditions.
-	return returns
 
 
 def build_features(window_returns: np.ndarray) -> np.ndarray:
@@ -252,16 +263,55 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 	Args:
 		config: Simulation and optimization settings.
 	"""
-	# Step 1: Simulate market returns with regime-switching drifts.
-	rng = np.random.default_rng(config.seed)
-	returns = simulate_market(
-		n_steps=config.n_steps,
-		n_assets=config.n_assets,
-		seed=config.seed,
-	)
+	logger = configure_logging(config.log_level)
 
-	theta = rng.normal(0.0, 0.5, size=3 * config.n_assets)
-	weights = np.full(config.n_assets, 1.0 / config.n_assets)
+	# Step 1: Load market returns based on selected source.
+	rng = np.random.default_rng(config.seed)
+	if config.data_source.lower() == "real":
+		returns = fetch_real_market_returns(
+			tickers=config.real_tickers,
+			period=config.real_period,
+			interval=config.real_interval,
+		)
+		n_assets = returns.shape[1]
+		n_steps = returns.shape[0]
+		logger.info(
+			"Starting run | source=real assets=%d steps=%d lookback=%d tickers=%s samples=%d risk_aversion=%.3f transaction_cost=%.5f seed=%d",
+			n_assets,
+			n_steps,
+			config.lookback,
+			",".join(config.real_tickers),
+			config.random_search_samples,
+			config.risk_aversion,
+			config.transaction_cost,
+			config.seed,
+		)
+	else:
+		returns = simulate_market(
+			n_steps=config.n_steps,
+			n_assets=config.n_assets,
+			seed=config.seed,
+		)
+		n_assets = config.n_assets
+		n_steps = config.n_steps
+		logger.info(
+			"Starting run | source=simulated assets=%d steps=%d lookback=%d samples=%d risk_aversion=%.3f transaction_cost=%.5f seed=%d",
+			n_assets,
+			n_steps,
+			config.lookback,
+			config.random_search_samples,
+			config.risk_aversion,
+			config.transaction_cost,
+			config.seed,
+		)
+
+	if n_steps <= config.lookback:
+		raise ValueError(
+			f"Not enough observations ({n_steps}) for lookback window ({config.lookback})"
+		)
+
+	theta = rng.normal(0.0, 0.5, size=3 * n_assets)
+	weights = np.full(n_assets, 1.0 / n_assets)
 
 	portfolio_returns = []
 	wealth = [1.0]
@@ -270,11 +320,12 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 	weight_log = []
 
 	# Step 2: Iterate through time steps, rebalance portfolio, and log results.
-	for t in range(config.lookback, config.n_steps):
+	for t in range(config.lookback, n_steps):
 		window = returns[t - config.lookback : t]
 		features = build_features(window)
 		mu = window.mean(axis=0)
 		cov = np.cov(window, rowvar=False)
+		prev_weights = weights.copy()
 
 		# Optimize quantum parameters with local random search to find better weights.
 		theta, new_weights, utility = optimize_quantum_parameters(
@@ -299,6 +350,24 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 		utility_log.append(utility)
 		weight_log.append(weights.copy())
 
+		logger.info(
+			"day=%3d | utility=%+.6f realized=%+.6f turnover=%.4f wealth=%.4f",
+			t,
+			utility,
+			realized,
+			turnover,
+			wealth[-1],
+		)
+		logger.debug(
+			"day=%3d | features=%s mu=%s diag_cov=%s prev_w=%s new_w=%s",
+			t,
+			np.array2string(features, precision=4, suppress_small=True),
+			np.array2string(mu, precision=6, suppress_small=True),
+			np.array2string(np.diag(cov), precision=7, suppress_small=True),
+			np.array2string(prev_weights, precision=4, suppress_small=True),
+			np.array2string(new_weights, precision=4, suppress_small=True),
+		)
+
 	# After the simulation, convert logs to arrays for easier analysis and print summary statistics.
 	portfolio_returns_arr = np.array(portfolio_returns)
 	weight_log_arr = np.array(weight_log)
@@ -311,7 +380,10 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 
 	print("Hybrid quantum-classical dynamic rebalancing PoC")
 	print("=" * 56)
-	print(f"Assets: {config.n_assets}, Steps: {config.n_steps}, Lookback: {config.lookback}")
+	print(f"Data source: {config.data_source}")
+	if config.data_source.lower() == "real":
+		print(f"Tickers: {', '.join(config.real_tickers)}")
+	print(f"Assets: {n_assets}, Steps: {n_steps}, Lookback: {config.lookback}")
 	print(f"Final wealth: {wealth[-1]:.4f}")
 	print(f"Cumulative return: {100 * cumulative_return:.2f}%")
 	print(f"Average daily return: {100 * avg_daily:.3f}%")
@@ -327,4 +399,4 @@ def run_hybrid_rebalancing(config: PoCConfig) -> None:
 
 
 if __name__ == "__main__":
-	run_hybrid_rebalancing(PoCConfig())
+	run_hybrid_rebalancing(parse_cli_args())
